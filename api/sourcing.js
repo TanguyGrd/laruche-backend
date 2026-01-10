@@ -1,28 +1,17 @@
 // api/sourcing.js
-// LaRuche.ai Backend - AliExpress Sourcing API
+// LaRuche.ai Backend - Version Corrigée pour AliExpress True API
 
 export default async function handler(req, res) {
-  // ============================================================================
-  // CORS CONFIGURATION
-  // ============================================================================
+  // CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
-
+  if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'GET') {
-    return res.status(405).json({ 
-      success: false, 
-      error: 'Method not allowed. Use GET.' 
-    });
+    return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  // ============================================================================
-  // PARAMETERS
-  // ============================================================================
   const { keywords } = req.query;
   const searchTerm = keywords || 'trending';
 
@@ -30,17 +19,46 @@ export default async function handler(req, res) {
 
   try {
     // ============================================================================
-    // FETCH ALIEXPRESS DATA
+    // VERSION 1 : ESSAYER /api/products (le plus commun)
     // ============================================================================
-    const apiUrl = `https://aliexpress-true-api.p.rapidapi.com/products?keywords=${encodeURIComponent(searchTerm)}&page_no=1&page_size=40&ship_to_country=FR&target_currency=EUR&target_language=FR`;
+    let apiUrl = `https://aliexpress-true-api.p.rapidapi.com/api/products?q=${encodeURIComponent(searchTerm)}&page=1&limit=40&currency=EUR&country=FR`;
     
-    const response = await fetch(apiUrl, {
-      method: 'GET',
+    console.log(`[LaRuche.ai] 📡 Tentative 1: /api/products`);
+
+    let response = await fetch(apiUrl, {
       headers: {
         'x-rapidapi-key': process.env.RAPIDAPI_KEY,
         'x-rapidapi-host': 'aliexpress-true-api.p.rapidapi.com'
       }
     });
+
+    // Si 404, essayer un autre endpoint
+    if (response.status === 404) {
+      console.log(`[LaRuche.ai] ⚠️ 404 sur /api/products, essai /products`);
+      
+      apiUrl = `https://aliexpress-true-api.p.rapidapi.com/products?keywords=${encodeURIComponent(searchTerm)}&page_no=1&page_size=40&ship_to_country=FR&target_currency=EUR`;
+      
+      response = await fetch(apiUrl, {
+        headers: {
+          'x-rapidapi-key': process.env.RAPIDAPI_KEY,
+          'x-rapidapi-host': 'aliexpress-true-api.p.rapidapi.com'
+        }
+      });
+    }
+
+    // Si toujours 404, essayer search
+    if (response.status === 404) {
+      console.log(`[LaRuche.ai] ⚠️ 404 sur /products, essai /search`);
+      
+      apiUrl = `https://aliexpress-true-api.p.rapidapi.com/search?query=${encodeURIComponent(searchTerm)}&page=1&limit=40`;
+      
+      response = await fetch(apiUrl, {
+        headers: {
+          'x-rapidapi-key': process.env.RAPIDAPI_KEY,
+          'x-rapidapi-host': 'aliexpress-true-api.p.rapidapi.com'
+        }
+      });
+    }
 
     if (!response.ok) {
       throw new Error(`API Error: ${response.status} ${response.statusText}`);
@@ -48,97 +66,135 @@ export default async function handler(req, res) {
 
     const data = await response.json();
     
-    console.log(`[LaRuche.ai] 📦 Réponse API reçue`);
+    console.log(`[LaRuche.ai] 📦 Réponse reçue, clés:`, Object.keys(data));
 
     // ============================================================================
-    // EXTRACT PRODUCTS (MULTIPLE PATHS)
+    // EXTRACTION MULTI-CHEMINS
     // ============================================================================
     const rawItems = 
       data?.data?.products || 
+      data?.data?.items ||
       data?.result?.items ||
-      data?.result?.item ||
+      data?.result?.products ||
       data?.items ||
       data?.products ||
+      data?.data ||
       [];
 
-    if (!Array.isArray(rawItems)) {
-      console.error('[LaRuche.ai] ❌ Format de réponse invalide');
+    if (!Array.isArray(rawItems) || rawItems.length === 0) {
+      console.log(`[LaRuche.ai] ⚠️ Aucun produit trouvé`);
+      
+      // Retourner structure de debug
       return res.status(200).json({
         success: false,
         count: 0,
         products: [],
-        error: 'Invalid response format from AliExpress API'
+        debug: {
+          message: 'Aucun produit trouvé dans la réponse API',
+          response_keys: Object.keys(data),
+          endpoint_used: apiUrl,
+          sample: JSON.stringify(data).substring(0, 500)
+        }
       });
     }
 
-    console.log(`[LaRuche.ai] 📊 Produits bruts: ${rawItems.length}`);
+    console.log(`[LaRuche.ai] 📊 ${rawItems.length} produits trouvés`);
 
     // ============================================================================
-    // TRANSFORM WITH LARUCHE.AI INTELLIGENCE
+    // TRANSFORMATION
     // ============================================================================
     const products = rawItems
-      .filter(item => item && (item.product_id || item.item_id || item.id))
-      .map(item => {
-        // === EXTRACTION ===
-        const id = String(item.product_id || item.item_id || item.id);
-        
+      .filter(item => item)
+      .map((item, index) => {
+        // ID (multiples variantes)
+        const id = String(
+          item.product_id || 
+          item.item_id || 
+          item.id ||
+          item.productId ||
+          `product_${index}`
+        );
+
+        // Titre
         const title = (
           item.product_title || 
           item.title ||
           item.name ||
+          item.productTitle ||
+          item.subject ||
           'Produit AliExpress'
         ).substring(0, 200);
 
+        // Image
         const image = 
           item.product_main_image_url || 
           item.main_url ||
           item.image_url ||
+          item.imageUrl ||
+          item.mainImageUrl ||
           item.pic_url ||
+          item.image ||
           'https://via.placeholder.com/400';
 
+        // Prix (essayer TOUTES les variantes)
         const costPrice = parseFloat(
           item.app_sale_price || 
           item.target_sale_price || 
           item.sale_price ||
+          item.salePrice ||
           item.price ||
+          item.originalPrice ||
+          item.min_price ||
+          item.target_app_sale_price_value ||
           0
         );
 
+        // Shipping
         const shippingCost = parseFloat(
           item.shipping_fee || 
+          item.shippingFee ||
           item.logistics_fee ||
+          item.freight ||
           0
         );
 
+        // Ventes
         const sales = parseInt(
           item.last_month_num || 
           item.sales_count || 
+          item.salesCount ||
           item.volume ||
+          item.sales ||
+          item.trade_count ||
           0
         );
 
+        // Rating
         const rating = parseFloat(
           item.evaluate_rate || 
+          item.evaluateRate ||
           item.rating ||
+          item.averageStar ||
+          item.average_star ||
           item.star ||
           4.5
         );
 
+        // Lien
         const link = 
           item.product_detail_url || 
+          item.productDetailUrl ||
           item.item_url ||
-          `https://aliexpress.com/item/${id}.html`;
+          item.detail_url ||
+          item.url ||
+          `https://www.aliexpress.com/item/${id}.html`;
 
-        // === LARUCHE.AI INTELLIGENCE ===
-        const AD_COST = 10;
-        const MULTIPLIER = 3;
-
-        const suggestedPrice = costPrice * MULTIPLIER;
-        const totalCost = costPrice + shippingCost + AD_COST;
+        // LaRuche.ai Intelligence
+        const suggestedPrice = costPrice * 3;
+        const totalCost = costPrice + shippingCost + 10;
         const netProfit = suggestedPrice - totalCost;
         const profitMargin = suggestedPrice > 0 ? (netProfit / suggestedPrice) * 100 : 0;
 
-        // Saturation Analysis
         let saturationStatus = 'niche';
         let saturationScore = 15;
 
@@ -149,8 +205,6 @@ export default async function handler(req, res) {
           saturationStatus = 'hot';
           saturationScore = 65;
         }
-
-        const shippingOptimized = shippingCost <= 5;
 
         return {
           id,
@@ -165,19 +219,16 @@ export default async function handler(req, res) {
           profit_margin: parseFloat(profitMargin.toFixed(2)),
           saturation_status: saturationStatus,
           saturation_score: saturationScore,
-          shipping_optimized: shippingOptimized,
+          shipping_optimized: shippingCost <= 5,
           rating: parseFloat(rating.toFixed(1)),
           sales,
           link
         };
       })
-      .filter(p => p.cost_price > 0 && p.net_profit > 0);
+      .filter(p => p.cost_price > 0);
 
-    console.log(`[LaRuche.ai] ✅ Produits transformés: ${products.length}`);
+    console.log(`[LaRuche.ai] ✅ ${products.length} produits valides`);
 
-    // ============================================================================
-    // RESPONSE
-    // ============================================================================
     res.status(200).json({
       success: true,
       count: products.length,
