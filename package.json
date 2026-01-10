@@ -1,0 +1,9 @@
+{
+  "name": "laruche-backend",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "LaRuche.ai Backend API - AliExpress Sourcing Intelligence",
+  "scripts": {
+    "dev": "vercel dev"
+  }
+}
