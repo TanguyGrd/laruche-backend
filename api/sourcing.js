@@ -1,8 +1,7 @@
 // api/sourcing.js
-// LaRuche.ai Backend - VERSION AMÉLIORÉE (Tri Pertinence + Plus de Résultats)
+// LaRuche.ai Backend - VERSION STABLE
 
 export default async function handler(req, res) {
-  // CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -18,13 +17,8 @@ export default async function handler(req, res) {
   console.log(`[LaRuche.ai] 🔍 Recherche: ${searchTerm}`);
 
   try {
-    // ============================================================================
-    // API ALIEXPRESS avec TRI PAR VENTES (meilleure pertinence)
-    // ============================================================================
-    const apiUrl = `https://aliexpress-true-api.p.rapidapi.com/api/v3/products?keywords=${encodeURIComponent(searchTerm)}&page_no=1&page_size=50&ship_to_country=FR&target_currency=EUR&target_language=FR&sort=ORDERS_DESC`;
+    const apiUrl = `https://aliexpress-true-api.p.rapidapi.com/api/v3/products?keywords=${encodeURIComponent(searchTerm)}&page_no=1&page_size=40&ship_to_country=FR&target_currency=EUR&target_language=FR&sort=SALE_PRICE_ASC`;
     
-    console.log(`[LaRuche.ai] 📡 Appel API (tri par ventes)`);
-
     const response = await fetch(apiUrl, {
       method: 'GET',
       headers: {
@@ -34,76 +28,34 @@ export default async function handler(req, res) {
     });
 
     if (!response.ok) {
-      throw new Error(`API Error: ${response.status} ${response.statusText}`);
+      throw new Error(`API Error: ${response.status}`);
     }
 
     const data = await response.json();
-    
-    console.log(`[LaRuche.ai] 📦 Réponse reçue`);
-
-    // ============================================================================
-    // EXTRACTION
-    // ============================================================================
     const rawItems = data?.products?.product || [];
 
-    if (!Array.isArray(rawItems)) {
-      console.error(`[LaRuche.ai] ❌ products.product n'est pas un array`);
+    if (!Array.isArray(rawItems) || rawItems.length === 0) {
       return res.status(200).json({
-        success: false,
+        success: true,
         count: 0,
         products: []
       });
     }
 
-    if (rawItems.length === 0) {
-      console.log(`[LaRuche.ai] ⚠️ 0 produits pour "${searchTerm}"`);
-      return res.status(200).json({
-        success: true,
-        count: 0,
-        products: [],
-        metadata: {
-          search_term: searchTerm,
-          message: 'Aucun produit trouvé'
-        }
-      });
-    }
-
-    console.log(`[LaRuche.ai] 📊 ${rawItems.length} produits trouvés`);
-
-    // ============================================================================
-    // FILTRE PAR PERTINENCE (titre doit contenir le mot-clé)
-    // ============================================================================
-    const searchWords = searchTerm.toLowerCase().split(' ');
-    
-    const filteredItems = rawItems.filter(item => {
-      const title = (item.product_title || '').toLowerCase();
-      // Le titre doit contenir au moins un des mots recherchés
-      return searchWords.some(word => title.includes(word));
-    });
-
-    console.log(`[LaRuche.ai] ✅ ${filteredItems.length} produits pertinents`);
-
-    // ============================================================================
-    // TRANSFORMATION
-    // ============================================================================
-    const products = filteredItems
+    const products = rawItems
       .filter(item => item && item.product_id)
-      .map((item, index) => {
+      .map((item) => {
         const id = String(item.product_id);
         const title = (item.product_title || 'Produit').substring(0, 200);
         const image = item.product_main_image_url || 'https://via.placeholder.com/400';
-        const costPrice = parseFloat(item.target_sale_price || item.target_app_sale_price || 0);
+        const costPrice = parseFloat(item.target_sale_price || 0);
         const shippingCost = costPrice > 50 ? 0 : 5;
         const sales = parseInt(item.lastest_volume || 0);
         const rating = 4.5;
         const link = item.product_detail_url || `https://fr.aliexpress.com/item/${id}.html`;
 
-        // LaRuche.ai Intelligence
-        const AD_COST = 10;
-        const MULTIPLIER = 3;
-
-        const suggestedPrice = costPrice * MULTIPLIER;
-        const totalCost = costPrice + shippingCost + AD_COST;
+        const suggestedPrice = costPrice * 3;
+        const totalCost = costPrice + shippingCost + 10;
         const netProfit = suggestedPrice - totalCost;
         const profitMargin = suggestedPrice > 0 ? (netProfit / suggestedPrice) * 100 : 0;
 
@@ -116,20 +68,6 @@ export default async function handler(req, res) {
         } else if (sales >= 500) {
           saturationStatus = 'hot';
           saturationScore = 65;
-        } else if (sales >= 100) {
-          saturationStatus = 'emerging';
-          saturationScore = 40;
-        }
-
-        const shippingOptimized = shippingCost <= 5;
-
-        if (index === 0) {
-          console.log(`[LaRuche.ai] Premier produit:`, {
-            title: title.substring(0, 50),
-            costPrice,
-            netProfit,
-            sales
-          });
         }
 
         return {
@@ -145,32 +83,22 @@ export default async function handler(req, res) {
           profit_margin: parseFloat(profitMargin.toFixed(2)),
           saturation_status: saturationStatus,
           saturation_score: saturationScore,
-          shipping_optimized: shippingOptimized,
+          shipping_optimized: shippingCost <= 5,
           rating,
           sales,
           link
         };
       })
-      .filter(p => p.cost_price > 0 && p.net_profit > 0)
-      .slice(0, 40); // Limite à 40 produits
-
-    console.log(`[LaRuche.ai] ✅ ${products.length} produits finaux`);
+      .filter(p => p.cost_price > 0);
 
     res.status(200).json({
       success: true,
       count: products.length,
-      products,
-      metadata: {
-        search_term: searchTerm,
-        timestamp: new Date().toISOString(),
-        powered_by: 'LaRuche.ai',
-        total_available: data?.total_record_count || products.length
-      }
+      products
     });
 
   } catch (error) {
     console.error(`[LaRuche.ai] ❌ Erreur:`, error);
-
     res.status(500).json({
       success: false,
       error: error.message,
