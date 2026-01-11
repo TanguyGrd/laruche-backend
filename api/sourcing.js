@@ -14,7 +14,7 @@ export default async function handler(req, res) {
   const { keywords } = req.query;
   const searchTerm = keywords || 'laptop';
 
-  console.log(`[LaRuche.ai] 🔍 Recherche: ${searchTerm}`);
+  console.log(`[LaRuche.ai] Recherche: ${searchTerm}`);
 
   try {
     const apiUrl = `https://aliexpress-true-api.p.rapidapi.com/api/v3/products?keywords=${encodeURIComponent(searchTerm)}&page_no=1&page_size=40&ship_to_country=FR&target_currency=EUR&target_language=FR&sort=SALE_PRICE_ASC`;
@@ -82,27 +82,4 @@ export default async function handler(req, res) {
           net_profit: parseFloat(netProfit.toFixed(2)),
           profit_margin: parseFloat(profitMargin.toFixed(2)),
           saturation_status: saturationStatus,
-          saturation_score: saturationScore,
-          shipping_optimized: shippingCost <= 5,
-          rating,
-          sales,
-          link
-        };
-      })
-      .filter(p => p.cost_price > 0);
-
-    res.status(200).json({
-      success: true,
-      count: products.length,
-      products
-    });
-
-  } catch (error) {
-    console.error(`[LaRuche.ai] ❌ Erreur:`, error);
-    res.status(500).json({
-      success: false,
-      error: error.message,
-      products: []
-    });
-  }
-}
+          saturation_score: sat
